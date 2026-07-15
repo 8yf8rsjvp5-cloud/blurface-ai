@@ -156,7 +156,7 @@ async function initFaceDetector(){
     faceDetector = await FaceDetector.createFromOptions(vision, {
       baseOptions: {
         modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
-        delegate: "GPU"
+        delegate: "CPU"
       },
       runningMode: "VIDEO",
       minDetectionConfidence: 0.4
@@ -544,6 +544,8 @@ async function processOneVideo(videoEl, canvasEl, onProgress){
 
   let frameIdx = 0;
   let lastTracks = [];
+  let totalDetections = 0;
+  let framesChecked = 0;
 
   function loop(){
     if (cancelRequested || videoEl.ended || videoEl.paused){
@@ -554,6 +556,8 @@ async function processOneVideo(videoEl, canvasEl, onProgress){
 
     if (frameIdx % profile.detectEveryNFrames === 0){
       const raw = detectRawFacesScaled(videoEl, dims);
+      framesChecked++;
+      if (raw.length > 0) totalDetections++;
       lastTracks = updateTracks(raw, performance.now());
     }
     lastTracks.forEach(t => { if (!t.excluded) applyEffectScaled(outCtx, videoEl, t, dims); });
@@ -569,7 +573,7 @@ async function processOneVideo(videoEl, canvasEl, onProgress){
   if (cancelRequested) return null;
 
   const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-  return { blob: new Blob(chunks, { type: mimeType.split(';')[0] }), ext };
+  return { blob: new Blob(chunks, { type: mimeType.split(';')[0] }), ext, totalDetections, framesChecked };
 }
 
 // Версии detectRawFaces/applyEffect с учётом того, что canvas может быть
@@ -703,6 +707,9 @@ async function startSingleProcessing(){
       els.downloadLink.download = 'blurface-result.' + result.ext;
       els.resultBox.classList.add('show');
       els.progressText.textContent = 'Готово';
+      if (result.totalDetections === 0){
+        showStatus(`⚠ Готово, но за все ${result.framesChecked} проверенных кадров ни разу не было найдено лицо — поэтому видео вышло без изменений. Дело не в настройках стиля/силы, а в том, что распознавание не сработало на этом видео (ракурс, качество, освещение). Попробуй другое видео с более чётким лицом анфас, ближе к камере.`, 'error');
+      }
     }
   } catch(e){
     showStatus('⚠ Ошибка обработки: ' + e.message, 'error');
