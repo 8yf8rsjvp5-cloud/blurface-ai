@@ -23,7 +23,7 @@ const els = {};
  'intensitySlider','intensityVal','intensityLabel','confidenceSlider','confidenceVal',
  'persistSlider','persistVal','processBtn','cancelProcessBtn','progressWrap','progressFill','progressText',
  'resultBox','resultVideo','downloadLink','startOverBtn','batchResultBox','batchCount','batchDownloadLink',
- 'batchStartOverBtn','batchToggle','emojiRow','colorRow','formatNote'
+ 'batchStartOverBtn','batchToggle','emojiRow','colorRow','formatNote','scrubSlider','scrubVal'
 ].forEach(id => els[id] = document.getElementById(id));
 
 const ctx = els.previewCanvas.getContext('2d', { willReadFrequently: true });
@@ -241,8 +241,14 @@ async function loadSingleVideoPreview(file){
   els.resultBox.classList.remove('show');
   els.batchResultBox.classList.remove('show');
 
-  els.sourceVideo.currentTime = 0;
+  // Берём кадр не с самого начала, а чуть внутрь ролика — у многих видео
+  // первая доля секунды это чёрный кадр или человек ещё не в кадре, и
+  // превью тогда ложно показывает "лицо не найдено", хотя дальше по видео
+  // оно прекрасно находится (сама обработка проверяет КАЖДЫЙ кадр, не только этот).
+  els.sourceVideo.currentTime = Math.min(0.5, els.sourceVideo.duration * 0.1);
   await new Promise((resolve) => { els.sourceVideo.onseeked = resolve; });
+  els.scrubSlider.value = 10;
+  els.scrubVal.textContent = '10%';
   renderStaticPreview();
   updateFormatNote();
 }
@@ -356,7 +362,9 @@ function renderStaticPreview(){
     ctx.strokeRect(t.x, t.y, t.w, t.h);
   });
 
-  els.faceCountBadge.textContent = raw.length > 0 ? `найдено лиц: ${raw.length}` : 'лиц не обнаружено на первом кадре';
+  els.faceCountBadge.textContent = raw.length > 0
+    ? `найдено лиц на этом кадре: ${raw.length}`
+    : 'на этом кадре превью лиц не видно — это нормально, обработка проверит каждый кадр видео отдельно';
   const excluded = tracks.find(t => t.excluded);
   if (excluded){
     els.excludeBadge.style.display = 'inline-block';
@@ -374,6 +382,15 @@ els.previewCanvas.addEventListener('click', (e) => {
   const y = (e.clientY - rect.top) / rect.height * els.previewCanvas.height;
   excludeAnchorPx = { x, y };
   excludeConsumed = false;
+  renderStaticPreview();
+});
+
+els.scrubSlider.addEventListener('input', async () => {
+  const pct = parseInt(els.scrubSlider.value, 10);
+  els.scrubVal.textContent = pct + '%';
+  if (!els.sourceVideo.duration) return;
+  els.sourceVideo.currentTime = (pct / 100) * els.sourceVideo.duration;
+  await new Promise((resolve) => { els.sourceVideo.onseeked = resolve; });
   renderStaticPreview();
 });
 
