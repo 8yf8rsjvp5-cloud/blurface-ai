@@ -163,7 +163,16 @@ async function initFaceDetector(){
     });
     faceDetectorAvailable = true;
     hideStatus();
-    renderStaticPreview();
+    // ВАЖНО: раньше здесь стоял вызов renderStaticPreview(), который пытался
+    // распознать лицо на ещё НЕ загруженном видео (нулевого размера кадр).
+    // MediaPipe отвечал на это ошибкой "ROI width/height must be > 0" и, что
+    // хуже, детектор после такой ошибки переставал находить лица вообще —
+    // на любом видео, загруженном впоследствии. Именно это было корнем всех
+    // жалоб "не находит лицо". Поэтому детекцию теперь не запускаем, пока
+    // пользователь реально не выбрал видеофайл.
+    if (els.sourceVideo.videoWidth > 0){
+      renderStaticPreview();
+    }
   } catch(e){
     faceDetectorAvailable = false;
     showStatus('⚠ Не удалось загрузить модель автоматического распознавания лиц (проверь интернет). Ручные функции недоступны в этой версии без детектора.', 'error');
@@ -275,6 +284,7 @@ let lastDetectionError = null;
 
 function detectRawFaces(videoEl){
   if (!faceDetector || !faceDetectorAvailable) return [];
+  if (!videoEl.videoWidth || !videoEl.videoHeight) return []; // защита: пустой/незагруженный кадр ломает детектор
   let result;
   try {
     result = faceDetector.detectForVideo(videoEl, performance.now());
@@ -591,6 +601,7 @@ async function processOneVideo(videoEl, canvasEl, onProgress){
 // в пространстве видео, но рисуем в масштабе canvas.
 function detectRawFacesScaled(videoEl, dims){
   if (!faceDetector || !faceDetectorAvailable) return [];
+  if (!videoEl.videoWidth || !videoEl.videoHeight || !dims.w || !dims.h) return []; // та же защита
   let result;
   try { result = faceDetector.detectForVideo(videoEl, performance.now()); lastDetectionError = null; }
   catch(e){ lastDetectionError = e.message || String(e); return []; }
