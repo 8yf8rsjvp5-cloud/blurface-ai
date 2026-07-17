@@ -271,12 +271,18 @@ function resetTracking(){
   els.clearExcludeBtn.style.display = 'none';
 }
 
+let lastDetectionError = null;
+
 function detectRawFaces(videoEl){
   if (!faceDetector || !faceDetectorAvailable) return [];
   let result;
   try {
     result = faceDetector.detectForVideo(videoEl, performance.now());
-  } catch(e){ return []; }
+    lastDetectionError = null;
+  } catch(e){
+    lastDetectionError = e.message || String(e);
+    return [];
+  }
   return (result.detections || [])
     .filter(d => (d.categories?.[0]?.score ?? 0) >= settings.confidence)
     .map(d => expandBoxForArea(d.boundingBox, settings.area));
@@ -365,6 +371,10 @@ function renderStaticPreview(){
   els.faceCountBadge.textContent = raw.length > 0
     ? `найдено лиц на этом кадре: ${raw.length}`
     : 'на этом кадре превью лиц не видно — это нормально, обработка проверит каждый кадр видео отдельно';
+
+  if (lastDetectionError){
+    showStatus('⚠ Реальная ошибка при распознавании: ' + lastDetectionError, 'error');
+  }
   const excluded = tracks.find(t => t.excluded);
   if (excluded){
     els.excludeBadge.style.display = 'inline-block';
@@ -582,7 +592,8 @@ async function processOneVideo(videoEl, canvasEl, onProgress){
 function detectRawFacesScaled(videoEl, dims){
   if (!faceDetector || !faceDetectorAvailable) return [];
   let result;
-  try { result = faceDetector.detectForVideo(videoEl, performance.now()); } catch(e){ return []; }
+  try { result = faceDetector.detectForVideo(videoEl, performance.now()); lastDetectionError = null; }
+  catch(e){ lastDetectionError = e.message || String(e); return []; }
   const scaleX = dims.w / videoEl.videoWidth, scaleY = dims.h / videoEl.videoHeight;
   return (result.detections || [])
     .filter(d => (d.categories?.[0]?.score ?? 0) >= settings.confidence)
@@ -708,7 +719,8 @@ async function startSingleProcessing(){
       els.resultBox.classList.add('show');
       els.progressText.textContent = 'Готово';
       if (result.totalDetections === 0){
-        showStatus(`⚠ Готово, но за все ${result.framesChecked} проверенных кадров ни разу не было найдено лицо — поэтому видео вышло без изменений. Дело не в настройках стиля/силы, а в том, что распознавание не сработало на этом видео (ракурс, качество, освещение). Попробуй другое видео с более чётким лицом анфас, ближе к камере.`, 'error');
+        const errPart = lastDetectionError ? ` Техническая причина: ${lastDetectionError}` : '';
+        showStatus(`⚠ Готово, но за все ${result.framesChecked} проверенных кадров ни разу не было найдено лицо — поэтому видео вышло без изменений.${errPart} Дело не в настройках стиля/силы.`, 'error');
       }
     }
   } catch(e){
