@@ -44,7 +44,7 @@ const settings = {
   color: '#5fb8a8',
   area: 'face',
   intensity: 50,
-  confidence: 0.4,
+  confidence: 0.3,
   persistMs: 500,
   quality: 'original',
   speed: 'quality',
@@ -165,7 +165,7 @@ async function initFaceDetector(){
         delegate: "CPU"
       },
       runningMode: "VIDEO",
-      minDetectionConfidence: 0.4
+      minDetectionConfidence: 0.15
     });
     faceDetectorAvailable = true;
     hideStatus();
@@ -306,7 +306,7 @@ async function recoverDetectorAfterError(){
         delegate: "CPU"
       },
       runningMode: "VIDEO",
-      minDetectionConfidence: 0.4
+      minDetectionConfidence: 0.15
     });
     faceDetectorAvailable = true;
     lastDetectionError = null;
@@ -314,6 +314,15 @@ async function recoverDetectorAfterError(){
     faceDetectorAvailable = false;
   }
   isReinitializingDetector = false;
+}
+
+const MAX_FACE_AREA_FRACTION = 0.35; // реальное лицо редко занимает больше трети кадра
+
+function isPlausibleFaceSize(bbox, canvasW, canvasH){
+  const frameArea = canvasW * canvasH;
+  if (frameArea <= 0) return true;
+  const boxArea = bbox.width * bbox.height;
+  return (boxArea / frameArea) <= MAX_FACE_AREA_FRACTION;
 }
 
 function detectRawFaces(videoEl){
@@ -330,6 +339,7 @@ function detectRawFaces(videoEl){
   }
   return (result.detections || [])
     .filter(d => (d.categories?.[0]?.score ?? 0) >= settings.confidence)
+    .filter(d => isPlausibleFaceSize(d.boundingBox, els.previewCanvas.width, els.previewCanvas.height))
     .map(d => expandBoxForArea(d.boundingBox, settings.area));
 }
 
@@ -643,6 +653,10 @@ function detectRawFacesScaled(videoEl, dims){
   const scaleX = dims.w / videoEl.videoWidth, scaleY = dims.h / videoEl.videoHeight;
   return (result.detections || [])
     .filter(d => (d.categories?.[0]?.score ?? 0) >= settings.confidence)
+    .filter(d => isPlausibleFaceSize(
+      { width: d.boundingBox.width * scaleX, height: d.boundingBox.height * scaleY },
+      dims.w, dims.h
+    ))
     .map(d => {
       const scaledBox = {
         originX: d.boundingBox.originX * scaleX, originY: d.boundingBox.originY * scaleY,
