@@ -155,7 +155,13 @@ async function initFaceDetector(){
     );
     faceDetector = await FaceDetector.createFromOptions(vision, {
       baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_full_range/float16/1/blaze_face_full_range.tflite",
+        // ВАЖНО: пробовал full-range модель для лучшего распознавания профиля,
+        // но она несовместима с этой версией библиотеки на уровне внутренней
+        // конфигурации графа (ошибка "raw_box_tensor->shape().dims[1] ==
+        // num_boxes_ (2304 vs. 896)") — файл модели существует, но графовый
+        // пайплайн в @mediapipe/tasks-vision жёстко рассчитан на анкеры
+        // short-range модели. Возврат на short-range.
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
         delegate: "CPU"
       },
       runningMode: "VIDEO",
@@ -281,6 +287,34 @@ function resetTracking(){
 }
 
 let lastDetectionError = null;
+let isReinitializingDetector = false;
+
+async function recoverDetectorAfterError(){
+  // Внутренний граф MediaPipe иногда "залипает" в плохом состоянии после
+  // ошибки (RET_CHECK/CalculatorGraph) и продолжает молча ничего не находить
+  // на всех следующих кадрах. Пересоздаём детектор с нуля в фоне, чтобы
+  // сессия не оставалась сломанной до перезагрузки страницы.
+  if (isReinitializingDetector) return;
+  isReinitializingDetector = true;
+  faceDetectorAvailable = false;
+  try {
+    faceDetector = await FaceDetector.createFromOptions(await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    ), {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+        delegate: "CPU"
+      },
+      runningMode: "VIDEO",
+      minDetectionConfidence: 0.4
+    });
+    faceDetectorAvailable = true;
+    lastDetectionError = null;
+  } catch(e){
+    faceDetectorAvailable = false;
+  }
+  isReinitializingDetector = false;
+}
 
 function detectRawFaces(videoEl){
   if (!faceDetector || !faceDetectorAvailable) return [];
@@ -291,6 +325,7 @@ function detectRawFaces(videoEl){
     lastDetectionError = null;
   } catch(e){
     lastDetectionError = e.message || String(e);
+    recoverDetectorAfterError();
     return [];
   }
   return (result.detections || [])
@@ -604,7 +639,7 @@ function detectRawFacesScaled(videoEl, dims){
   if (!videoEl.videoWidth || !videoEl.videoHeight || !dims.w || !dims.h) return []; // та же защита
   let result;
   try { result = faceDetector.detectForVideo(videoEl, performance.now()); lastDetectionError = null; }
-  catch(e){ lastDetectionError = e.message || String(e); return []; }
+  catch(e){ lastDetectionError = e.message || String(e); recoverDetectorAfterError(); return []; }
   const scaleX = dims.w / videoEl.videoWidth, scaleY = dims.h / videoEl.videoHeight;
   return (result.detections || [])
     .filter(d => (d.categories?.[0]?.score ?? 0) >= settings.confidence)
