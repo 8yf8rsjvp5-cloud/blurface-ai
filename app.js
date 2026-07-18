@@ -44,10 +44,10 @@ const settings = {
   color: '#5fb8a8',
   area: 'face',
   intensity: 50,
-  confidence: 0.5,
+  confidence: 0.4,
   persistMs: 1500,
   quality: 'original',
-  speed: 'balance',
+  speed: 'quality',
   format: 'webm',
 };
 
@@ -476,7 +476,7 @@ function applyEffect(videoEl, track){
 
   } else if (settings.style === 'blur'){
     // Тот же фикс: ctx.filter не работает в Safari, используем downscale/upscale.
-    const scaleFactor = Math.max(0.03, 1 - (intensity/100) * 0.9);
+    const scaleFactor = Math.max(0.02, 0.28 - (intensity/100) * 0.26); // сильнее на любом значении слайдера
     const tmp = document.createElement('canvas');
     tmp.width = Math.max(1, Math.round(w * scaleFactor));
     tmp.height = Math.max(1, Math.round(h * scaleFactor));
@@ -691,7 +691,7 @@ function applyEffectOnContext(targetCtx, videoEl, track, dims){
     // "лицо не замазывается" при выбранном стиле "Размытие" была именно в этом.
     // Заменено на уменьшение+увеличение картинки со сглаживанием — простой
     // приём, дающий эффект размытия средствами, которые поддерживают все браузеры.
-    const scaleFactor = Math.max(0.03, 1 - (intensity/100) * 0.9);
+    const scaleFactor = Math.max(0.02, 0.28 - (intensity/100) * 0.26); // сильнее на любом значении слайдера
     const tmp = document.createElement('canvas');
     tmp.width = Math.max(1, Math.round(w * scaleFactor));
     tmp.height = Math.max(1, Math.round(h * scaleFactor));
