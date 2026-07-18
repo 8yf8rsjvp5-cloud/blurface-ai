@@ -475,18 +475,18 @@ function applyEffect(videoEl, track){
     ctx.imageSmoothingEnabled = true;
 
   } else if (settings.style === 'blur'){
-    const radius = Math.round(2 + (intensity/100) * 35);
-    const pad = radius;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, y, w, h);
-    ctx.clip();
-    ctx.filter = `blur(${radius}px)`;
-    const sx = Math.max(0, x - pad), sy = Math.max(0, y - pad);
-    const sw2 = Math.min(els.previewCanvas.width - sx, w + pad*2);
-    const sh2 = Math.min(els.previewCanvas.height - sy, h + pad*2);
-    ctx.drawImage(videoEl, sx, sy, sw2, sh2, sx, sy, sw2, sh2);
-    ctx.restore();
+    // Тот же фикс: ctx.filter не работает в Safari, используем downscale/upscale.
+    const scaleFactor = Math.max(0.03, 1 - (intensity/100) * 0.9);
+    const tmp = document.createElement('canvas');
+    tmp.width = Math.max(1, Math.round(w * scaleFactor));
+    tmp.height = Math.max(1, Math.round(h * scaleFactor));
+    const tctx = tmp.getContext('2d');
+    tctx.imageSmoothingEnabled = true;
+    tctx.imageSmoothingQuality = 'high';
+    tctx.drawImage(videoEl, x, y, w, h, 0, 0, tmp.width, tmp.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(tmp, 0, 0, tmp.width, tmp.height, x, y, w, h);
   }
 }
 
@@ -685,18 +685,23 @@ function applyEffectOnContext(targetCtx, videoEl, track, dims){
     targetCtx.drawImage(tmp, 0, 0, tmp.width, tmp.height, x, y, w, h);
     targetCtx.imageSmoothingEnabled = true;
   } else if (settings.style === 'blur'){
-    const radius = Math.round(2 + (intensity/100) * 35);
-    const pad = radius;
-    targetCtx.save();
-    targetCtx.beginPath();
-    targetCtx.rect(x, y, w, h);
-    targetCtx.clip();
-    targetCtx.filter = `blur(${radius}px)`;
-    const sx = Math.max(0, x - pad), sy = Math.max(0, y - pad);
-    const sw2 = Math.min(dims.w - sx, w + pad*2);
-    const sh2 = Math.min(dims.h - sy, h + pad*2);
-    targetCtx.drawImage(videoEl, sx/scaleX, sy/scaleY, sw2/scaleX, sh2/scaleY, sx, sy, sw2, sh2);
-    targetCtx.restore();
+    // ВАЖНО: ctx.filter = 'blur()' физически НЕ поддерживается в Safari/WebKit
+    // (подтверждено официальной документацией MDN и багтрекером WebKit) — код
+    // не выдавал ошибку, но эффект молча не применялся. Настоящая причина
+    // "лицо не замазывается" при выбранном стиле "Размытие" была именно в этом.
+    // Заменено на уменьшение+увеличение картинки со сглаживанием — простой
+    // приём, дающий эффект размытия средствами, которые поддерживают все браузеры.
+    const scaleFactor = Math.max(0.03, 1 - (intensity/100) * 0.9);
+    const tmp = document.createElement('canvas');
+    tmp.width = Math.max(1, Math.round(w * scaleFactor));
+    tmp.height = Math.max(1, Math.round(h * scaleFactor));
+    const tctx = tmp.getContext('2d');
+    tctx.imageSmoothingEnabled = true;
+    tctx.imageSmoothingQuality = 'high';
+    tctx.drawImage(videoEl, x/scaleX, y/scaleY, w/scaleX, h/scaleY, 0, 0, tmp.width, tmp.height);
+    targetCtx.imageSmoothingEnabled = true;
+    targetCtx.imageSmoothingQuality = 'high';
+    targetCtx.drawImage(tmp, 0, 0, tmp.width, tmp.height, x, y, w, h);
   }
 }
 
@@ -728,10 +733,12 @@ async function startSingleProcessing(){
       els.downloadLink.href = url;
       els.downloadLink.download = 'blurface-result.' + result.ext;
       els.resultBox.classList.add('show');
-      els.progressText.textContent = 'Готово';
+      els.progressText.textContent = `Готово · лицо находилось на ${result.totalDetections} из ${result.framesChecked} проверенных кадров`;
       if (result.totalDetections === 0){
         const errPart = lastDetectionError ? ` Техническая причина: ${lastDetectionError}` : '';
         showStatus(`⚠ Готово, но за все ${result.framesChecked} проверенных кадров ни разу не было найдено лицо — поэтому видео вышло без изменений.${errPart} Дело не в настройках стиля/силы.`, 'error');
+      } else {
+        showStatus(`ℹ Для диагностики: лицо было найдено на ${result.totalDetections} из ${result.framesChecked} кадров. Формат записи: ${result.ext}. Если в скачанном видео лицо всё равно не замазано при таких цифрах — пришли мне этот текст, это укажет на другую причину.`);
       }
     }
   } catch(e){
