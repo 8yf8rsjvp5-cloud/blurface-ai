@@ -45,7 +45,7 @@ const settings = {
   area: 'face',
   intensity: 50,
   confidence: 0.4,
-  persistMs: 1500,
+  persistMs: 500,
   quality: 'original',
   speed: 'quality',
   format: 'webm',
@@ -155,7 +155,7 @@ async function initFaceDetector(){
     );
     faceDetector = await FaceDetector.createFromOptions(vision, {
       baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_full_range/float16/1/blaze_face_full_range.tflite",
         delegate: "CPU"
       },
       runningMode: "VIDEO",
