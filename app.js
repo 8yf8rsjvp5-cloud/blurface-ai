@@ -325,12 +325,14 @@ function isPlausibleFaceSize(bbox, canvasW, canvasH){
   return (boxArea / frameArea) <= MAX_FACE_AREA_FRACTION;
 }
 
-function detectRawFaces(videoEl){
+function detectRawFaces(source){
   if (!faceDetector || !faceDetectorAvailable) return [];
-  if (!videoEl.videoWidth || !videoEl.videoHeight) return []; // защита: пустой/незагруженный кадр ломает детектор
+  const srcW = source.videoWidth || source.width;
+  const srcH = source.videoHeight || source.height;
+  if (!srcW || !srcH) return []; // защита: пустой/незагруженный кадр ломает детектор
   let result;
   try {
-    result = faceDetector.detectForVideo(videoEl, performance.now());
+    result = faceDetector.detectForVideo(source, performance.now());
     lastDetectionError = null;
   } catch(e){
     lastDetectionError = e.message || String(e);
@@ -414,7 +416,13 @@ function updateTracks(rawBoxes, nowMs){
 
 function renderStaticPreview(){
   ctx.drawImage(els.sourceVideo, 0, 0, els.previewCanvas.width, els.previewCanvas.height);
-  const raw = detectRawFaces(els.sourceVideo);
+  // ВАЖНО: распознаём по уже отрисованному canvas (els.previewCanvas), а не по
+  // сырому <video>. У видео с телефона часто есть отдельные метаданные
+  // поворота (снято боком) — плеер и canvas.drawImage() их правильно
+  // учитывают при отображении, а прямая подача видео в детектор могла отдавать
+  // координаты для НЕповёрнутого сырого кадра, из-за чего рамка оказывалась
+  // совсем не там, где реальное лицо на экране.
+  const raw = detectRawFaces(els.previewCanvas);
   const tracks = updateTracks(raw, performance.now());
 
   ctx.lineWidth = Math.max(2, els.previewCanvas.width * 0.004);
@@ -620,7 +628,10 @@ async function processOneVideo(videoEl, canvasEl, onProgress){
     outCtx.drawImage(videoEl, 0, 0, dims.w, dims.h);
 
     if (frameIdx % profile.detectEveryNFrames === 0){
-      const raw = detectRawFacesScaled(videoEl, dims);
+      // Так же, как в предпросмотре: распознаём по уже отрисованному canvas
+      // (canvasEl), а не по сырому видео — устраняет рассинхронизацию
+      // координат из-за поворота видео, снятого боком.
+      const raw = detectRawFacesOnCanvas(canvasEl);
       framesChecked++;
       if (raw.length > 0) totalDetections++;
       lastTracks = updateTracks(raw, performance.now());
@@ -641,29 +652,20 @@ async function processOneVideo(videoEl, canvasEl, onProgress){
   return { blob: new Blob(chunks, { type: mimeType.split(';')[0] }), ext, totalDetections, framesChecked };
 }
 
-// Версии detectRawFaces/applyEffect с учётом того, что canvas может быть
-// меньше исходного видео (выбрано другое качество) — координаты считаем
-// в пространстве видео, но рисуем в масштабе canvas.
-function detectRawFacesScaled(videoEl, dims){
+// Распознаём прямо по уже отрисованному canvas (не по сырому видео) — так
+// координаты гарантированно совпадают с тем, что реально видно на экране,
+// независимо от поворота исходного видеофайла. Масштабирование видео-space
+// больше не нужно: canvas уже в целевом разрешении (с учётом "Качества").
+function detectRawFacesOnCanvas(canvasEl){
   if (!faceDetector || !faceDetectorAvailable) return [];
-  if (!videoEl.videoWidth || !videoEl.videoHeight || !dims.w || !dims.h) return []; // та же защита
+  if (!canvasEl.width || !canvasEl.height) return []; // защита от пустого кадра
   let result;
-  try { result = faceDetector.detectForVideo(videoEl, performance.now()); lastDetectionError = null; }
+  try { result = faceDetector.detectForVideo(canvasEl, performance.now()); lastDetectionError = null; }
   catch(e){ lastDetectionError = e.message || String(e); recoverDetectorAfterError(); return []; }
-  const scaleX = dims.w / videoEl.videoWidth, scaleY = dims.h / videoEl.videoHeight;
   return (result.detections || [])
     .filter(d => (d.categories?.[0]?.score ?? 0) >= settings.confidence)
-    .filter(d => isPlausibleFaceSize(
-      { width: d.boundingBox.width * scaleX, height: d.boundingBox.height * scaleY },
-      dims.w, dims.h
-    ))
-    .map(d => {
-      const scaledBox = {
-        originX: d.boundingBox.originX * scaleX, originY: d.boundingBox.originY * scaleY,
-        width: d.boundingBox.width * scaleX, height: d.boundingBox.height * scaleY
-      };
-      return expandBoxForAreaDims(scaledBox, settings.area, dims);
-    });
+    .filter(d => isPlausibleFaceSize(d.boundingBox, canvasEl.width, canvasEl.height))
+    .map(d => expandBoxForAreaDims(d.boundingBox, settings.area, {w: canvasEl.width, h: canvasEl.height}));
 }
 function expandBoxForAreaDims(bbox, area, dims){
   const M = {
@@ -681,9 +683,6 @@ function expandBoxForAreaDims(bbox, area, dims){
   return { x, y, w, h };
 }
 function applyEffectScaled(outCtx, videoEl, track, dims){
-  const prevCanvasRef = els.previewCanvas;
-  // applyEffect читает els.previewCanvas.width/height и рисует через модульный ctx —
-  // для экспортного canvas временно подменяем контекст-таргет через параметры.
   applyEffectOnContext(outCtx, videoEl, track, dims);
 }
 function applyEffectOnContext(targetCtx, videoEl, track, dims){
@@ -693,7 +692,13 @@ function applyEffectOnContext(targetCtx, videoEl, track, dims){
   const h = Math.min(Math.floor(h0), dims.h - y);
   if (w <= 0 || h <= 0) return;
   const intensity = settings.intensity;
-  const scaleX = dims.w / videoEl.videoWidth, scaleY = dims.h / videoEl.videoHeight;
+  // ВАЖНО: пикселизация/размытие теперь читают исходные пиксели из САМОГО
+  // canvas (targetCtx.canvas), а не из сырого <video> — тот же кадр уже
+  // отрисован туда правильной стороной на этом же шаге цикла. Раньше здесь
+  // был пересчёт координат обратно в пространство видео (scaleX/scaleY) для
+  // чтения из videoEl напрямую — при видео с поворотом (снято боком на
+  // телефон) это давало те же смещения, что и раньше в самом распознавании.
+  const sourceCanvas = targetCtx.canvas;
 
   if (settings.style === 'black'){
     const alpha = 0.3 + (intensity/100) * 0.7;
@@ -728,8 +733,8 @@ function applyEffectOnContext(targetCtx, videoEl, track, dims){
     tmp.width = Math.max(1, Math.floor(w / sw));
     tmp.height = Math.max(1, Math.floor(h / sh));
     const tctx = tmp.getContext('2d');
-    // координаты источника — в пространстве видео, поэтому делим на масштаб
-    tctx.drawImage(videoEl, x/scaleX, y/scaleY, w/scaleX, h/scaleY, 0, 0, tmp.width, tmp.height);
+    // координаты уже в пространстве canvas — читаем прямо оттуда
+    tctx.drawImage(sourceCanvas, x, y, w, h, 0, 0, tmp.width, tmp.height);
     targetCtx.imageSmoothingEnabled = false;
     targetCtx.drawImage(tmp, 0, 0, tmp.width, tmp.height, x, y, w, h);
     targetCtx.imageSmoothingEnabled = true;
@@ -747,7 +752,7 @@ function applyEffectOnContext(targetCtx, videoEl, track, dims){
     const tctx = tmp.getContext('2d');
     tctx.imageSmoothingEnabled = true;
     tctx.imageSmoothingQuality = 'high';
-    tctx.drawImage(videoEl, x/scaleX, y/scaleY, w/scaleX, h/scaleY, 0, 0, tmp.width, tmp.height);
+    tctx.drawImage(sourceCanvas, x, y, w, h, 0, 0, tmp.width, tmp.height);
     targetCtx.imageSmoothingEnabled = true;
     targetCtx.imageSmoothingQuality = 'high';
     targetCtx.drawImage(tmp, 0, 0, tmp.width, tmp.height, x, y, w, h);
